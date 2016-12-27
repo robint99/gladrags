@@ -19,7 +19,8 @@ Examples:
 **Gladrags with a medium smear effect:**
 ![medium smear](https://github.com/robint99/screenshots/raw/master/gladrags%20medium%20smear.png)
 
-Via the preferences dialog it is possible to specify the amount of the effect to apply and whether to apply the effect to all panels or just the panel containing the applet. 
+Via the preferences dialog it is possible to specify the amount of the effect to apply and whether to apply the effect to all panels or just the panel containing the applet.
+ 
 ![Gladrags preferences](https://github.com/robint99/screenshots/raw/master/gladrags%20prefs.png)
 
 Gladrags will also automatically update panel backgrounds whenever your desktop wallpaper changes.
@@ -40,7 +41,7 @@ Gladrags uses the wonderful [ImageMagick](http://www.imagemagick.org/script/inde
 ## Limitations
 
 Currently there is no support for multi-monitor setups, but this is planned for the future. Gladrags may or may not work correctly in this situation - it is currently untested.
-Also, for Gladrags to work, you must change your wallpaper settings to the style is either 'Zoom' or 'Stretch'
+Also, for Gladrags to work, you must change your wallpaper settings so that the style is set to either 'Zoom' or 'Stretch'.
 Gladrags only works with background images. It won't work if e.g. you have a colour gradient set as your background.
 
 ## Installation
