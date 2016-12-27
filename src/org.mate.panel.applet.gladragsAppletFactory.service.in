@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.mate.panel.applet.GladRagsAppletFactory
+Exec=/usr/bin/env python3  @LOCATION@

@@ -1,0 +1,882 @@
+#!/usr/bin/env python3
+
+"""Provide an applet to help improve the appearance of MATE panels
+
+Create a Mate panel applet and handle events generated
+by it
+
+Add options to the panel right click menu to provide an About and a
+Preferences dialog
+
+Use ImageMagick to:
+    grab the current desktop image
+    work out which parts of the image are behind MATE panels
+    apply effects (e.g. blur, pixellate, smear, grayscale) to these parts
+    of the image
+    tint the results image with a semi transparent colour
+    save the resulting images, and set each panel to use the appropriate
+    image as its background
+
+Set up event handlers the panel and background dconf settings so that 
+the panel backgrounds are recalculated whenever e.g. the panel size or 
+orientarion changes, or when a new background image is set
+
+"""
+
+# Copyright (C) 1997-2003 Free Software Foundation, Inc.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation; either version 2 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+# 02110-1301, USA.
+#
+# Author:
+#     Robin Thompson
+
+# do not change the value of this variable - it will be set during build
+# according to the value of the --with-gtk3 option used with .configure
+
+build_gtk2 = False
+
+import gi
+
+if build_gtk2:
+    gi.require_version("Gtk", "2.0")
+else:
+    gi.require_version("Gtk", "3.0")
+
+gi.require_version("MatePanelApplet", "4.0")
+
+import os
+import sys
+import subprocess
+import time
+from enum import Enum
+from collections import namedtuple
+
+sys.path.insert(1, '@pythondir@')
+
+from gi.repository import Gtk
+from gi.repository import MatePanelApplet
+from gi.repository import Gdk
+from gi.repository import Gio
+from gi.repository import GObject
+from gi.repository import GdkPixbuf
+import cairo
+
+from log_it import log_it as log_it
+from prefs_dlg import EffectType, PrefsDialog
+from about import AboutDialog
+
+CONST_ICON_BORDER = 4  # pixel border around each side of applet's panel icon
+
+# define a type to hold an effect level as a string (e.g. Slight, Medium, Heavy) and 
+# the corresponding argument that needs to be passed to ImageMagick e.g. "-blur 0x2"
+EffectLevel = namedtuple('EffectLevel', ['readable', 'im_arg'])
+
+
+class GladRags(object):
+    """ The main class
+
+    Create the 
+    """
+
+    def __init__(self, applet):
+        """Init Gladrags
+
+        
+        Set default values
+        Load settings from dconf
+        Set the applet size
+        Setup the applet right click menu and actions
+        """
+
+        super().__init__()
+
+        self.__panel_id = ""  # will hold the toplevel id of the panel containing the
+        # applet
+        self.__panel_size = 0  # will hold the current panel size
+        self.__applet = applet  # the panel applet, in case we need it later
+        self.__icon_da = None  # a label where the applet's icon will be drawn
+        self.box = None  # a container to hold the drawing area
+        self.__settings_path = None  # the applet's preferences dconf settings path in full
+        self.__settings = None  # the applet's dconf settings
+        self.__applet_spath = None  # as above, but minus the /prefs/' suffix
+        self.__object_settings = None  # the dconf settings of the applet
+        self.__bg_settings = None  # the background image dconf settings
+        self.__panel_settings = None  # the dconf settings of the applet's panel
+        self.__panel_list = None  # the dconf settings listing MATE panels
+
+        self.__bg_filename = ""
+
+        self.__all_panels = False   # whether to apply effects to all panels or only the panel
+                                    # containing the applet
+        self.__active_effect = EffectType.pixellate  # default effect type
+        self.__pixellate_val = "slight"  # unt of pixellation to apply
+        self.__blur_val = "slight"  # default amount of blur to apply
+        self.__smear_val = "slight"
+        self.__panel_tint_colour = "#000000"  # default colour to apply to panels
+        self.__panel_alpha = 0.5  # default alpha level of tint colour
+        self.__about_dlg = None  # the about dialog
+        self.__prefs_dlg = None  # the preferences dialog
+
+        # create the gui bits of the applet
+        if build_gtk2:
+            self.box = Gtk.HBox()
+        else:
+            self.box = Gtk.Grid()
+            self.box.orientation = Gtk.Orientation.HORIZONTAL
+
+        self.__icon_da = Gtk.Label()
+
+        # set the drawing area's size and add it to the container
+        self.__icon_da.set_size_request(self.__applet.get_size(), self.__applet.get_size())
+        self.box.add(self.__icon_da)
+
+        # set the applet icon size
+        self.set_icon_size()
+
+        # for use in testing, we need to load the applet icon from a specific directory
+        # not @LOCATION@ 
+        icon_name = "tux1_light.png"
+        if "@" in "@LOCATION@":
+            icon_path = os.path.expanduser("~/devel/gladrags/src/")
+            self.__icon_pb = GdkPixbuf.Pixbuf.new_from_file("%s%s" % (icon_path, icon_name))
+        else:
+            self.__icon_pb = GdkPixbuf.Pixbuf.new_from_file("@LOCATION@/%s" % icon_name)
+
+        # set up event handler for the draw/expose event 
+        if build_gtk2:
+            self.__icon_da.connect("expose-event", self.do_expose_event)
+        else:
+            self.__icon_da.connect("draw", self.do_expose_event)
+
+        # setup the effect values i.e. a set of strings and the corresponding arguments
+        # that need to be sent to ImageMagick
+        self.__blur_values = []
+        self.__blur_values.append(EffectLevel(readable="slight", im_arg="-blur 0x02"))
+        self.__blur_values.append(EffectLevel(readable="medium", im_arg="-blur 0x04"))
+        self.__blur_values.append(EffectLevel(readable="heavy", im_arg="-blur 0x08"))
+
+        self.__pix_values = []
+        self.__pix_values.append(EffectLevel(readable="slight", im_arg="-sample 15%"))
+        self.__pix_values.append(EffectLevel(readable="medium", im_arg="-sample 10%"))
+        self.__pix_values.append(EffectLevel(readable="heavy", im_arg="-sample 7%"))
+        self.__pix_values.append(EffectLevel(readable="very heavy", im_arg="-sample 5%"))
+
+        self.__smear_values = []
+        self.__smear_values.append(EffectLevel(readable="slight",
+                                               im_arg="-interpolate nearest -virtual-pixel mirror -spread 5"))
+        self.__smear_values.append(EffectLevel(readable="medium",
+                                               im_arg="-interpolate nearest -virtual-pixel mirror -spread 10"))
+        self.__smear_values.append(EffectLevel(readable="heavy",
+                                               im_arg="-interpolate nearest -virtual-pixel mirror -spread 15"))
+
+        self.gr_action_group = None
+
+        # applet right click menu
+        self.setup_menu()
+
+        # instantiate a timer to perform further setup once the applet has been
+        # fully created
+        GObject.timeout_add(1000, self.do_delayed_setup)
+
+    def do_delayed_setup(self):
+        """ Perform additional setup that can only be done once the applet has been fully
+            created
+
+        Get the applet, panel, and background image settings from dconf
+
+        Create event handlers to fire when the background image changes and when the
+        applet's panel settings change
+
+        Set the panel background for the first time
+        """
+
+        self.__settings_path = self.__applet.get_preferences_path()
+        self.__settings = Gio.Settings.new_with_path("org.mate.panel.applet.gladrags",
+                                                     self.__settings_path)
+        self.read_settings()
+
+        self.__applet_spath = self.__settings_path[0: len(self.__settings_path) - 6]  # remove "prefs/" suffix
+        self.__object_settings = Gio.Settings.new_with_path("org.mate.panel.object", self.__applet_spath)
+        self.__object_settings.connect("changed",
+                                       self.applet_panel_settings_changed)
+
+        self.__bg_settings = Gio.Settings.new("org.mate.background")
+        self.__bg_settings.connect("changed", self.background_changed)
+
+        self.get_panel_id()
+        settings_path = "/org/mate/panel/toplevels/%s/" % self.__panel_id
+        self.__panel_settings = Gio.Settings.new_with_path("org.mate.panel.toplevel",
+                                                           settings_path)
+
+        self.__panel_list = Gio.Settings.new("org.mate.panel")
+
+        self.set_panel_background()
+
+    def read_settings(self):
+        """ Read the current applet settings from dconf
+
+        """
+
+        self.__all_panels = self.__settings.get_boolean("all-panels")
+        self.__active_effect = EffectType(self.__settings.get_int("active-effect"))
+        self.__pixellate_val = self.__settings.get_string("pixellate-setting")
+        self.__blur_val = self.__settings.get_string("blur-setting")
+        self.__smear_val = self.__settings.get_string("smear-setting")
+        self.__panel_tint_colour = self.__settings.get_string("panel-colour")
+        self.__panel_alpha = float(self.__settings.get_string("panel-alpha"))
+
+    def write_settings(self):
+        """ Write the current applet settings to dconf
+        """
+
+        self.__settings.set_boolean("all-panels", self.__all_panels)
+        self.__settings.set_int("active-effect", self.__active_effect.value)
+        self.__settings.set_string("blur-setting", self.__blur_val)
+        self.__settings.set_string("pixellate-setting", self.__pixellate_val)
+        self.__settings.set_string("smear-setting", self.__smear_val)
+        self.__settings.set_string("panel-colour", self.__panel_tint_colour)
+        self.__settings.set_string("panel-alpha", "%.3f" % self.__panel_alpha)
+
+    def set_icon_size(self):
+        """ Set the applet's size
+
+        Get the current size of the applet's panel, set the size of the drawing area
+        appropriatly, and redraw the icon
+        """
+
+        self.__panel_size = self.__applet.get_size()
+        self.__icon_da.set_size_request(self.__applet.get_size(), self.__applet.get_size())
+        self.__icon_da.queue_draw()
+
+    def prefs_dlg_ok_cb(self, widget, event):
+        """ Callback for the 'ok' button on the preferences dialog.
+
+        write the new settings
+        redraw panel backgrounds
+        close the dialog
+
+        Args:
+            widget - the button the caused the event
+            event - the event args
+        """
+
+        # call the apply callback to write the settings and update panel backgrounds
+        self.prefs_dlg_apply_cb(widget, event)
+        self.__prefs_dlg.hide()
+
+    def prefs_dlg_apply_cb(self, widget, event):
+        """ Callback for the 'apply' button on the preferences dialog.
+
+        write the new settings
+        redraw panel backgrounds
+
+        Args:
+            widget - the button the caused the event
+            event - the event args
+        """
+
+        # update our settings from the dialog
+        self.__active_effect = self.__prefs_dlg.active_effect
+        self.__blur_val = self.__prefs_dlg.blur_level
+        self.__pixellate_val = self.__prefs_dlg.pix_level
+        self.__smear_val = self.__prefs_dlg.smear_level
+        self.__panel_tint_colour = self.__prefs_dlg.panel_colour
+        self.__panel_alpha = self.__prefs_dlg.opacity
+        self.__all_panels = self.__prefs_dlg.all_panels
+
+        self.write_settings()
+        self.set_panel_background()
+
+    def show_prefs_dlg(self, data=None):
+        """ Setup and show the Preferences dialog """
+
+        if self.__prefs_dlg is None:
+            self.__prefs_dlg = PrefsDialog(self.prefs_dlg_ok_cb,
+                                           self.prefs_dlg_apply_cb)
+
+            # setup the effect level options
+            els = []
+            for el in self.__blur_values:
+                els.append(el.readable)
+            self.__prefs_dlg.setup_blur_levels(els)
+
+            els = []
+            for el in self.__pix_values:
+                els.append(el.readable)
+            self.__prefs_dlg.setup_pix_levels(els)
+
+            els = []
+            for el in self.__smear_values:
+                els.append(el.readable)
+            self.__prefs_dlg.setup_smear_levels(els)
+
+            self.__prefs_dlg.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+
+            # set the dialog's values
+            self.__prefs_dlg.panel_colour = self.__panel_tint_colour
+            self.__prefs_dlg.opacity = self.__panel_alpha
+            self.__prefs_dlg.blur_level = self.__blur_val
+            self.__prefs_dlg.pix_level = self.__pixellate_val
+            self.__prefs_dlg.smear_level = self.__smear_val
+            self.__prefs_dlg.active_effect = self.__active_effect
+            self.__prefs_dlg.all_panels = self.__all_panels
+            self.__prefs_dlg.show_all()
+
+        else:
+            self.__prefs_dlg.show_all()
+
+    def show_about_dlg(self, data=None):
+        """ Setup and show the About dialog """
+
+        if self.__about_dlg is None:
+            self.__about_dlg = AboutDialog()
+
+        self.__about_dlg.show_all()
+
+    def setup_menu(self):
+        """Set up the right click menu for the applet
+        """
+
+        self.gr_action_group = Gtk.ActionGroup("GladragsActions")
+        self.gr_action_group.add_actions([
+            ("prefs_action", Gtk.STOCK_PREFERENCES,
+             "Gladrags P_references", None, "Gladrags Preferences",
+             self.show_prefs_dlg),
+            ("about_action", Gtk.STOCK_ABOUT,
+             "About Gladrags...", None, "About Gladrags...", self.show_about_dlg),
+        ])
+
+        menu_xml = '<menuitem name="Preferences" action="prefs_action"/>'
+        menu_xml += '<menuitem name="About" action="about_action"/><separator/>'
+
+        self.__applet.setup_menu(menu_xml, self.gr_action_group)
+
+    def do_expose_event(self, widget, event):
+        """ Draw the applet icon
+
+        Resize the icon according to the panel size and ensure it has a border
+        between it and the surrounding applets
+        """
+
+        # draw off screen before copying to the drawing area
+        offscreen_surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                               self.__panel_size,
+                                               self.__panel_size)
+        ctx = cairo.Context(offscreen_surface)
+
+        #        ctx.set_source_rgba(1, 0, 0, 0)
+        #       ctx.rectangle(0, 0, self.__panel_size, self.__panel_size)
+        #      ctx.fill()
+
+        # scale the icon to the panel size and the border required
+        panel_icon_size = self.__panel_size - (CONST_ICON_BORDER * 2)
+        base_icon_size = self.__icon_pb.get_width()
+        resize_factor = panel_icon_size / base_icon_size
+        sized_icon_pb = self.__icon_pb.scale_simple(base_icon_size * resize_factor,
+                                                    base_icon_size * resize_factor,
+                                                    GdkPixbuf.InterpType.BILINEAR)
+        # do the drawing
+        #        Gdk.cairo_set_source_pixbuf(ctx, sized_icon_pb, CONST_ICON_BORDER, CONST_ICON_BORDER)
+        Gdk.cairo_set_source_pixbuf(ctx, sized_icon_pb, CONST_ICON_BORDER, CONST_ICON_BORDER)
+        ctx.rectangle(0, 0, self.__panel_size, self.__panel_size)
+        ctx.paint()
+
+        # now draw to the screen
+        if build_gtk2:
+            screen_ctx = self.__icon_da.window.cairo_create()
+            screen_ctx.rectangle(event.area.x, event.area.y,
+                                 event.area.width, event.area.height)
+            screen_ctx.clip()
+
+            # alloc = self.drawing_area.get_allocation()
+            # if (self.applet_orient == MatePanelApplet.AppletOrient.UP) or \
+            #   (self.applet_orient == MatePanelApplet.AppletOrient.DOWN):
+            #    screen_ctx.set_source_surface(offscreen_surface, alloc.x, 0)
+            # else:
+            #   screen_ctx.set_source_surface(offscreen_surface, 0, alloc.y)
+
+            screen_ctx.set_source_surface(offscreen_surface, 0, 0)
+            screen_ctx.paint()
+            screen_ctx = None
+        else:
+            event.set_source_surface(offscreen_surface, 0, 0)
+            event.paint()
+            ctx = None
+
+    def applet_panel_settings_changed(self, settings, key):
+        """ Callback for when the the applet settings with regards to it's
+            panel are changed
+
+            If the applet is now on a different panel, get the new panel id and
+            change the panel's background
+        """
+
+        if key == "toplevel-id":
+            self.get_panel_id()
+            self.set_panel_background()
+
+    def background_changed(self, settings, key):
+        """ Callback for when the desktop wallpaper settings are changed
+        """
+
+        if (key == "picture-filename") or (key == "picture-options"):
+            if key == "picture-filename":
+                if settings.get_string(key) != self.__bg_filename:
+                    self.set_panel_background()
+                    self.__bg_filename = settings.get_string(key)
+
+    # noinspection PyIncorrectDocstring
+    def get_clarg_from_effect_level(self, el_str, el_list):
+        """ Get the ImageMagick command line args for a specified effect level
+
+        Args:
+            el_str: The effect level (e.g. "Medium")
+            el_list : a list of EffectLevel namedtuples
+
+        Returns:
+            A string contain the command line args
+        """
+
+        res = [q.im_arg for q in el_list if q.readable == el_str]
+        return res[0]
+
+    def set_panel_background(self):
+        """ Apply background effects as necessary
+    
+        Depending on the all-panels setting, apply the effects to all panels or
+        just to the one contaning the applet
+
+        """
+
+        if self.__all_panels:
+            # iterate through all panels
+            toplevels = self.__panel_list.get_value("toplevel-id-list").unpack()
+            for toplevel in toplevels:
+                self.apply_background_effect(toplevel)
+            #                time.sleep(0.5)
+            #                Gtk.main_iteration_do(False)
+
+        else:
+            # apply only to applet's panel
+            self.apply_background_effect(self.__panel_id)
+
+    def apply_background_effect(self, panel_id):
+        """ Apply background effects to a panel
+
+        Only supports images that are stretched or zoomed to fit the desktop -
+        other settings may cause the image not to entirely fit the desktop
+
+        Args:
+            panel_id: the toplevel id of the panel in question
+
+        """
+
+        def run_im(im_cmd):
+            """ run an ImageMagick command (e.g. convert, identify etc)
+
+            Args: 
+                im_cmd - the command, plus args, to run
+
+            Returns:
+                the final line that the command writes to stdout, or None
+                if no output was produced
+            """
+
+            magick_cmd = subprocess.Popen(im_cmd, shell=True, stdout=subprocess.PIPE)
+            magick_line = None
+            for magick_line in magick_cmd.stdout:
+                pass
+
+            if magick_line is not None:
+                return str(magick_line)
+            else:
+                return magick_line
+
+        def rm_files(the_files):
+            """ Convenience local function to check if some files exist and delete 
+                them if so
+
+            Args:
+                filename - a list of the files to delete
+            """
+
+            for this_file in the_files:
+                if os.path.exists(this_file):
+                    os.remove(this_file)
+
+        settings_path = "/org/mate/panel/toplevels/%s/" % panel_id
+        panel_settings = Gio.Settings.new_with_path("org.mate.panel.toplevel",
+                                                    settings_path)
+
+        panel_orient = panel_settings.get_string("orientation")
+
+        # get the panel's background settings (for later)
+        pbg_settings_path = "/org/mate/panel/toplevels/%s/background/" % panel_id
+        # get this panel's settings
+
+        pbg_settings = Gio.Settings.new_with_path("org.mate.panel.toplevel.background",
+                                                  pbg_settings_path)
+
+        # get the background image filename 
+        img_fn = self.__bg_settings.get_string("picture-filename")
+
+        cmdstr = "identify " + img_fn
+        results = run_im(cmdstr)
+        results = results.split()
+        dims = results[2].split("x")
+
+        # save images into  ~/./config/gladrags/
+        save_dir = os.path.expanduser("~/.config/gladrags")
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+
+        # define the various filenames used during the
+        resize_fn = save_dir + "/resized.png"
+        cropped_fn = save_dir + "/cropped.png"
+        zoom_fn = save_dir + "/zoom.jpg"
+        effect_fn = save_dir + "/effect.png"
+        back_fn = save_dir + "/back.png"
+        gr0_fn = save_dir + "/%s_bg0.jpg" % panel_id
+        gr1_fn = save_dir + "/%s_bg1.jpg" % panel_id
+
+        bg_style = self.__bg_settings.get_string("picture-options")
+
+        px, py, pw, ph = self.get_panel_info(panel_id)
+
+        # get the size of the desktop that the panel is on
+        screen = Gdk.Screen.get_default()
+        monitor = screen.get_monitor_at_point(px, py)
+        if build_gtk2:
+            mon_geom = Gdk.Rectangle(0, 0, 0, 0)
+            screen.get_monitor_geometry(monitor, mon_geom)
+        else:
+            mon_geom = screen.get_monitor_geometry(monitor)
+
+        desktop_x = mon_geom.width - mon_geom.x
+        desktop_y = mon_geom.height - mon_geom.y
+
+        # extract the part of the image background that lies behind the panel and save it
+        if bg_style == "stretched":
+            # compensate for differences between the desktop size and the size of the image
+            scalex = int(dims[0]) / desktop_x
+            scaley = int(dims[1]) / desktop_y
+
+            # crop the relevant bit of the image
+            crop_geom = "%dx%s+%s+%s" % (int(pw * scalex), int(ph * scaley), int(px * scalex), int(py * scaley))
+            cmdstr = "convert %s -crop %s +repage %s" % (img_fn, crop_geom, cropped_fn)
+            run_im(cmdstr)
+
+            # resize the cropped" image to the panel size
+            cmdstr = "convert %s -resize %sx%s\! %s" % (cropped_fn, pw, ph, resize_fn)
+            run_im(cmdstr)
+
+        elif bg_style == "zoom":
+            # use IM to resize the image to fit the desktop and ignore the image aspect ratio
+            cmdstr = "convert %s -resize %dx%d^ -gravity center -extent %dx%d %s" \
+                     % (img_fn, desktop_x, desktop_y, desktop_x, desktop_y, zoom_fn)
+
+            run_im(cmdstr)
+
+            # now crop out the panel image and save it
+            crop_geom = "%dx%s+%s+%s" % (pw, ph, px, py)
+            cmdstr = "convert %s -crop %s +repage %s" % (zoom_fn, crop_geom, resize_fn)
+            run_im(cmdstr)
+
+        else:
+            # other background styles do not nesessarily cause the background to fill the
+            # entire desktop so are not supported. instead we just create an image 
+            # filled with the panel background colour 
+
+            cmdstr = "convert -size %sx%s xc:%s%0.2X %s" % (pw, ph, self.__panel_tint_colour, 1, resize_fn)
+            cmd = subprocess.Popen(cmdstr, shell=True, stdout=subprocess.PIPE)
+            for line in cmd.stdout:
+                pass
+
+        # if only this command worked with all compositors....
+        # cmdstr = 'import -silent -window "x-caja-desktop" -crop %dx%d+%d+%d %s' \
+        #                 %(pw, ph, px, py, resize_fn)
+
+        # Now we can apply effects to the panel background
+        if self.__active_effect == EffectType.blur:
+            im_arg = self.get_clarg_from_effect_level(self.__blur_val, self.__blur_values)
+            cmdstr = "convert %s %s -scale %sx%s! %s" % (resize_fn, im_arg, pw, ph, effect_fn)
+        elif self.__active_effect == EffectType.pixellate:
+            im_arg = self.get_clarg_from_effect_level(self.__pixellate_val, self.__pix_values)
+            cmdstr = "convert %s %s -scale %sx%s! %s" % (resize_fn, im_arg, pw, ph, effect_fn)
+        elif self.__active_effect == EffectType.smear:
+            im_arg = self.get_clarg_from_effect_level(self.__smear_val, self.__smear_values)
+            cmdstr = "convert %s %s %s" % (resize_fn, im_arg, effect_fn)
+        else:
+            cmdstr = "convert %s -colorspace Gray -scale %sx%s! %s" % (resize_fn, pw, ph, effect_fn)
+
+        run_im(cmdstr)
+
+        # apply the panel tint colour at the specified alpha level to the effects image
+        cmdstr = "convert -size %sx%s xc:%s%0.2X %s" % (pw, ph,
+                                                        self.__panel_tint_colour, int(256 * self.__panel_alpha),
+                                                        back_fn)
+        run_im(cmdstr)
+
+        # finally composite the effects and colour/transparency images into the final
+        # image
+        # we have to specify a different filename for the final image each time -
+        # the panel does not update if the name doesn't change, even if the file contents
+        # are different
+        if os.path.isfile(gr0_fn):
+            old_fn = gr0_fn
+            final_fn = gr1_fn
+        else:
+            old_fn = gr1_fn
+            final_fn = gr0_fn
+
+        cmdstr = "composite %s %s %s" % (back_fn, effect_fn, final_fn)
+        run_im(cmdstr)
+
+        # set the panel background image
+        pbg_settings.set_string("type", "image")
+        pbg_settings.set_string("image", os.path.abspath(final_fn))
+        pbg_settings.sync()
+
+        # remove files we no longer need
+        rm_files([old_fn, resize_fn, resize_fn, cropped_fn, zoom_fn, effect_fn, back_fn])
+
+    def get_panel_id(self):
+        """ Get the toplevel id of the panel the applet is on
+
+        Note: self.__object_settings needs to have been setup before this is
+        called
+        """
+
+        # get the info from dconf settings
+        self.__panel_id = self.__object_settings.get_string("toplevel-id")
+
+    def get_panel_info(self, panel_id):
+        """ Get the position and size of a MATE panel 
+        
+
+        Read the panel settings from dconf. 
+
+        Adjust the height/postion of left/right aligned panels to take into account the
+        height of any top or bottom panels
+
+        Args:
+            panel_id : the toplevel id of the panel
+
+        Returns: 4 x int x_pos, ypos, width, height
+            
+        """
+
+        def get_vertical_adjustments():
+            """ Local func to get the height of any top panel and bottom panels, so that
+                the height of left/right panels can be adjusted
+
+            Note: will not work if there are more than 1 top or bottom panels...
+
+            Returns:
+                top_adjust : the top panel height
+                bottom_adjust : the bottom panel height
+            """
+
+            t_adjust = 0
+            h_adjust = 0
+
+            # we need to read panel settings from dconf
+            # get a list of all panels and iterate through them
+            toplevels = self.__panel_list.get_value("toplevel-id-list").unpack()
+            for toplevel in toplevels:
+
+                if self.__panel_id != panel_id:
+                    tl_path = "/org/mate/panel/toplevels/%s/" % toplevel
+
+                    # get this panel's settings
+                    tpsettings = Gio.Settings.new_with_path("org.mate.panel.toplevel",
+                                                            tl_path)
+
+                    # get the info
+                    pnl_orient = tpsettings.get_string("orientation")
+                    if pnl_orient == "top":
+                        t_adjust = tpsettings.get_int("size")
+                    if pnl_orient == "bottom":
+                        h_adjust = tpsettings.get_int("size")
+
+            return t_adjust, h_adjust
+
+            # TODO - should be monitor ... get the screen, use screen.get_monitor_at_point() with
+
+        # an x and y somewhere inside the panel, then use screen.get_monitor_geometry to the
+        # screen width and height...
+        # get the current screen height and width
+        screen = Gdk.Screen.get_default()
+        #        screen_width = screen.get_width()
+        #        screen_height = screen.get_height()
+
+        # get the info
+
+        settings_path = "/org/mate/panel/toplevels/%s/" % panel_id
+        panel_settings = Gio.Settings.new_with_path("org.mate.panel.toplevel",
+                                                    settings_path)
+        panel_orient = panel_settings.get_string("orientation")
+
+        screen = Gdk.Screen.get_default()
+        monitor = panel_settings.get_int("monitor")
+        if build_gtk2:
+            mon_geom = Gdk.Rectangle(0, 0, 0, 0)
+            screen.get_monitor_geometry(monitor, mon_geom)
+        else:
+            mon_geom = screen.get_monitor_geometry(monitor)
+
+        screen_width = mon_geom.width - mon_geom.x
+        screen_height = mon_geom.height - mon_geom.y
+
+        panel_x = panel_settings.get_int("x")
+        panel_y = panel_settings.get_int("y")
+        panel_size = panel_settings.get_int("size")
+        if (panel_orient == "top") or (panel_orient == "bottom"):
+            panel_height = panel_settings.get_int("size")
+
+            # TODO: check the Expand property - do not assume screen width
+            panel_width = screen_width
+
+        if (panel_orient == "left") or (panel_orient == "right"):
+            # adjust the y position to take into account any top and bottom panels
+            top_adjust, height_adjust = get_vertical_adjustments()
+            panel_y += top_adjust
+
+            # TODO - check the Expand property - do not assume screen_height,
+            # also, may not need to adjust height and width if Expanded
+            panel_height = screen_height - top_adjust - height_adjust
+            panel_width = panel_settings.get_int("size")
+
+        return panel_x, panel_y, panel_width, panel_height
+
+
+def applet_button_release(widget, event):
+    """Button press event for the applet
+
+    Args:
+        widget : the widget that registered the release event
+        event : the event args
+
+    """
+
+    if event.button == 1:
+        pass
+
+    # See https://bugs.launchpad.net/ubuntu-mate/+bug/1554128
+    if event.button == 2:  # middle click
+        pass
+
+
+def applet_change_orient(applet, orient, gr):
+    """Handler for applet change orientation event
+
+    Args:
+        applet : the widget that registered the event i.e. the applet
+        orient : the new orientation
+        gr : the gladrags object
+    """
+
+    # TODO: put some code here if needed
+    pass
+
+
+def applet_change_size(applet, size, gr):
+    """Handler for the applet change size event
+
+    Redraw the panel background to accomodate the new panel size
+
+    Args:
+        applet : the widget that registered the event i.e. the applet
+        size   : the new panel size
+        gr     : the gladrags object
+    """
+
+    gr.set_icon_size()
+
+
+def applet_fill(applet):
+    """
+    Create the applet
+
+    Register the events that we're interested in getting events for and
+    connect event handlers for them
+
+    Create a pixbuf and add it V/HBox to the applet
+
+
+    Args:
+        applet : the applet
+    """
+
+    os.chdir(os.path.expanduser("~"))
+    applet.set_events(applet.get_events() | Gdk.EventMask.BUTTON_PRESS_MASK
+                      | Gdk.EventMask.BUTTON_RELEASE_MASK
+                      | Gdk.EventMask.POINTER_MOTION_MASK
+                      | Gdk.EventMask.KEY_PRESS_MASK
+                      | Gdk.EventMask.KEY_RELEASE_MASK
+                      | Gdk.EventMask.STRUCTURE_MASK)
+
+    # | Gdk.EventMask.BUTTON1_MOTION_MASK)
+
+    gr = GladRags(applet)
+    applet.add(gr.box)
+    applet.show_all()
+
+    # create an event handler so that we can react to changes e.g
+    # the panel the applet is on, or it's position on the panel
+    #    applet.connect("button-press-event", applet_button_press)
+    applet.connect("change-orient", applet_change_orient, gr)
+    applet.connect("change-size", applet_change_size, gr)
+
+    applet.set_background_widget(applet)  # hack for panel transparency
+
+
+def applet_factory(applet, iid, data):
+    """Factory routine called when an applet needs to be created
+
+    Create a gladrags applet if necessary
+
+    Args:
+        applet : the applet
+        iid    : the id of the applet that needs to be created
+        data   :
+    Returns:
+        True if we created a gladrags applet, False otherwise
+    """
+
+    if iid != "GladRags":
+        return False
+
+    applet_fill(applet)
+
+    return True
+
+
+MatePanelApplet.Applet.factory_main("GladRagsAppletFactory", True,
+                                    MatePanelApplet.Applet.__gtype__,
+                                    applet_factory, None)
+
+
+def main():
+    """Main function.
+
+    Debugging code can go here
+    """
+    pass
+
+
+if __name__ == "__main__":
+    main()

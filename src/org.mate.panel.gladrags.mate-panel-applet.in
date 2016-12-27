@@ -1,0 +1,13 @@
+[Applet Factory]
+Id=GladRagsAppletFactory
+InProcess=false
+Location=@LOCATION@
+Name=GladRags Applet Factory
+Description=Smarten up your panels!
+
+[GladRags]
+Name=Gladrags
+Description=Smarten up your panels!
+Icon=desktop
+
+

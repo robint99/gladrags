@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+
+"""Provide a configuration dialog for galdrags dock panel applet
+
+    Allow the user to specify the:
+        panel colour and alpha level
+        effect to apply to the panel background (e.g. grayscale,
+        pixellate etc.)
+        the amount of the effect to apply
+
+"""
+# Copyright (C) 1997-2003 Free Software Foundation, Inc.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation; either version 2 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied waTrranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+# 02110-1301, USA.
+#
+# Author:
+#     Robin Thompson
+
+# do not change the value of this variable - it will be set during build
+# according to the value of the --with-gtk3 option used with .configure
+
+build_gtk2 = False
+
+import gi
+
+if build_gtk2:
+    gi.require_version("Gtk", "2.0")
+else:
+    gi.require_version("Gtk", "3.0")
+
+from gi.repository import Gtk
+from gi.repository import Gdk
+import cairo
+import math
+from enum import Enum
+
+
+# define the effect types
+class EffectType(Enum):
+    blur = 0
+    pixellate = 1
+    smear = 2
+    grayscale = 3
+
+
+class PrefsDialog(Gtk.Window):
+    """Class to provide the preferences dialog functionality
+
+    Create and display the preferences window
+
+    Provide methods to get and set:
+        the background colour and alpha level
+        the effect type
+        the effect amount
+
+    Provide a gui to allow these to be set as required
+
+    Allow the user to apply the effects without closing the dialog
+
+    """
+
+    def __init__(self, ok_callback, apply_callback):
+        """ Constructor for the preferences dialog 
+
+        Create the window and its contents and display them
+
+        set the callback for the ok button press
+
+        Args:
+            ok_callback : the method to be called when the ok button is
+                          is pressed
+            apply_callback : the method to be called when the apply button
+                             is pressed
+
+        """
+
+        super().__init__(title="Preferences")
+
+        self.connect("delete-event", self.win_delete_event)
+        self.set_size_request(400, -1)
+        # setup the window contents
+        self.set_border_width(5)
+        if build_gtk2:
+            self.__hbox = Gtk.HBox()
+        else:
+            self.__hbox = Gtk.Box()
+            self.__hbox.set_orientation(Gtk.Orientation.HORIZONTAL)
+        self.__hbox.set_spacing(2)
+
+        if build_gtk2:
+            self.__hbox1 = Gtk.HBox()
+        else:
+            self.__hbox1 = Gtk.Box()
+            self.__hbox1.set_orientation(Gtk.Orientation.HORIZONTAL)
+        self.__hbox1.set_spacing(2)
+
+        if build_gtk2:
+            self.__vbox = Gtk.VBox()
+        else:
+            self.__vbox = Gtk.Box()
+            self.__vbox.set_orientation(Gtk.Orientation.VERTICAL)
+        self.__vbox.set_spacing(2)
+
+        self.__cancel_btn = Gtk.Button(label="Cancel",
+                                       stock=Gtk.STOCK_CANCEL)
+        self.__cancel_btn.connect("button-press-event",
+                                  self.win_cancel_button_press)
+        self.__ok_btn = Gtk.Button(label="Ok", stock=Gtk.STOCK_OK)
+        self.__ok_btn.connect("button-press-event", ok_callback)
+
+        self.__apply_btn = Gtk.Button(label="Apply",
+                                      stock=Gtk.STOCK_APPLY)
+        self.__apply_btn.connect("button-press-event", apply_callback)
+
+        if build_gtk2:
+            self.__hbbx = Gtk.HButtonBox()
+        else:
+            self.__hbbx = Gtk.ButtonBox()
+            self.__hbbx.set_orientation(Gtk.Orientation.HORIZONTAL)
+
+        self.__hbbx.set_spacing(4)
+        self.__hbbx.set_layout(Gtk.ButtonBoxStyle.END)
+
+        self.__hbbx.pack_start(self.__ok_btn, False, False, 4)
+        self.__hbbx.pack_start(self.__apply_btn, False, False, 4)
+        self.__hbbx.pack_start(self.__cancel_btn, False, False, 4)
+
+        self.__frame_tint_colour = self.create_frame("Panel Tint Color")
+        self.__lbl_colour = Gtk.Label("Colour")
+        self.__colbtn = Gtk.ColorButton()
+
+        if build_gtk2:
+            self.__table_colour = Gtk.Table(rows=2, columns=2,
+                                            homogeneous=False)
+        else:
+            self.__table_colour = Gtk.Grid()
+            self.__table_colour.set_column_spacing(4)
+            self.__table_colour.set_row_spacing(4)
+            self.__table_colour.set_row_homogeneous(True)
+
+        self.__lbl_alpha = Gtk.Label("Opacity")
+        if build_gtk2:
+            adj = Gtk.Adjustment(lower=0.0, upper=0.95, step_incr=0.05, page_incr=0.05, page_size=0.05)
+            self.__scale_alpha = Gtk.HScale(adjustment=adj)
+            self.__scale_alpha.set_digits(2)
+        else:
+            self.__scale_alpha = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
+                                                          0.00, 0.95, 0.05)
+        self.__scale_alpha.add_mark(0.00, Gtk.PositionType.LEFT | Gtk.PositionType.BOTTOM,
+                                    "Transparent")
+        self.__scale_alpha.add_mark(0.95, Gtk.PositionType.RIGHT | Gtk.PositionType.BOTTOM,
+                                    "Opaque")
+        if build_gtk2:
+            self.__table_colour.attach(self.__lbl_colour, 0, 1, 0, 1,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+            self.__table_colour.attach(self.__colbtn, 1, 2, 0, 1,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+            self.__table_colour.attach(self.__lbl_alpha, 0, 1, 1, 2)
+            self.__table_colour.attach(self.__scale_alpha, 1, 2, 1, 2)
+        else:
+            self.__table_colour.attach(self.__lbl_colour, 0, 0, 1, 1)
+            self.__table_colour.attach(self.__colbtn, 1, 0, 1, 1)
+            self.__table_colour.attach(self.__lbl_alpha, 0, 1, 1, 1)
+            self.__scale_alpha.set_hexpand(True)
+            self.__table_colour.attach(self.__scale_alpha, 1, 1, 1, 1)
+
+        self.__frame_tint_colour_align = Gtk.Alignment(xalign=0.5, yalign=0.5,
+                                                       xscale=1.0, yscale=1.0)
+        self.__frame_tint_colour_align.set_padding(0, 0, 12, 0)
+        self.__frame_tint_colour_align.add(self.__table_colour)
+        self.__frame_tint_colour.add(self.__frame_tint_colour_align)
+
+        self.__frame_effect = self.create_frame("Effect")
+        if build_gtk2:
+            self.__table_effect = Gtk.Table(rows=4, columns=2,
+                                            homogeneous=False)
+        else:
+            self.__table_effect = Gtk.Grid()
+            self.__table_effect.set_column_spacing(4)
+            self.__table_effect.set_row_spacing(4)
+            self.__table_effect.set_row_homogeneous(True)
+
+        self.__rb_grayscale = Gtk.RadioButton(label="Grayscale")
+        self.__rb_grayscale.connect("toggled", self.effect_changed)
+
+        self.__rb_blur = Gtk.RadioButton(group=self.__rb_grayscale,
+                                         label="Blur")
+        self.__rb_blur.connect("toggled", self.effect_changed)
+        self.__cbt_blur = Gtk.ComboBoxText()
+
+        self.__rb_pixellate = Gtk.RadioButton(group=self.__rb_grayscale,
+                                              label="Pixellate")
+        self.__rb_pixellate.connect("toggled", self.effect_changed)
+        self.__cbt_pixellate = Gtk.ComboBoxText()
+
+        self.__rb_smear = Gtk.RadioButton(group=self.__rb_grayscale,
+                                          label="Smear")
+        self.__rb_smear.connect("toggled", self.effect_changed)
+        self.__cbt_smear = Gtk.ComboBoxText()
+
+        if build_gtk2:
+            self.__table_effect.attach(self.__rb_grayscale, 0, 1, 0, 1,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__table_effect.attach(self.__rb_blur, 0, 1, 1, 2,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+            self.__table_effect.attach(self.__cbt_blur, 1, 2, 1, 2,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+            self.__table_effect.attach(self.__rb_pixellate, 0, 1, 2, 3,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+            self.__table_effect.attach(self.__cbt_pixellate, 1, 2, 2, 3,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+            self.__table_effect.attach(self.__rb_smear, 0, 1, 3, 4,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+            self.__table_effect.attach(self.__cbt_smear, 1, 2, 3, 4,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2)
+        else:
+            self.__table_effect.attach(self.__rb_grayscale, 0, 0, 1, 1)
+            self.__table_effect.attach(self.__rb_blur, 0, 1, 1, 1)
+            self.__table_effect.attach(self.__cbt_blur, 1, 1, 1, 1)
+            self.__table_effect.attach(self.__rb_pixellate, 0, 2, 1, 1)
+            self.__table_effect.attach(self.__cbt_pixellate, 1, 2, 1, 1)
+            self.__table_effect.attach(self.__rb_smear, 0, 3, 1, 1)
+            self.__table_effect.attach(self.__cbt_smear, 1, 3, 1, 1)
+            self.__cbt_blur.set_hexpand(True)
+
+        self.__frame_effect_align = Gtk.Alignment(xalign=0.5, yalign=0.5,
+                                                  xscale=1.0, yscale=1.0)
+        self.__frame_effect_align.set_padding(0, 0, 12, 0)
+        self.__frame_effect_align.add(self.__table_effect)
+        self.__frame_effect.add(self.__frame_effect_align)
+
+        self.__frame_panels = self.create_frame("Panels")
+        self.__cb_all_panels = Gtk.CheckButton(label="Apply effects to all panels")
+        if build_gtk2:
+            self.__table_panels = Gtk.Table(rows=1, columns=2,
+                                            homogeneous=False)
+        else:
+            self.__table_panels = Gtk.Grid()
+            self.__table_panels.set_column_spacing(4)
+            self.__table_panels.set_row_spacing(4)
+            self.__table_panels.set_row_homogeneous(True)
+
+        if build_gtk2:
+            self.__table_panels.attach(self.__cb_all_panels, 0, 1, 0, 1,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+        else:
+            self.__table_panels.attach(self.__cb_all_panels, 0, 0, 1, 1)
+
+        self.__frame_panels_align = Gtk.Alignment(xalign=0.5, yalign=0.5,
+                                                  xscale=1.0, yscale=1.0)
+        self.__frame_panels_align.set_padding(0, 0, 12, 0)
+        self.__frame_panels_align.add(self.__table_panels)
+        self.__frame_panels.add(self.__frame_panels_align)
+
+        self.__vbox.pack_start(self.__frame_tint_colour, True, False, 4)
+        self.__vbox.pack_start(self.__frame_effect, True, False, 4)
+        self.__vbox.pack_start(self.__frame_panels, True, False, 4)
+        self.__vbox.pack_start(Gtk.HSeparator(), True, False, 4)
+        self.__vbox.pack_start(self.__hbbx, False, False, 0)
+        self.add(self.__vbox)
+        self.show_all()
+
+        self.__blur_list = None  # a list to hold the blur level strings e.g. "slight", "medium" and "heavy"
+        self.__pix_list = None  # a list to hold the pixellation level strings
+        self.__smear_list = None  # a list to hold the smear level strings
+
+    def create_frame(self, caption):
+        """ Convenience function to create a Gtk.Frame with a desired caption
+            in bold text
+
+        Returns:
+            frame - the Gtk.Frame we created
+
+        """
+
+        frame = Gtk.Frame(label="aaaa")
+        lbl = frame.get_label_widget()
+        lbl.set_use_markup(True)
+        lbl.set_label("<b>%s</b>" % caption)
+        frame.set_shadow_type(Gtk.ShadowType.NONE)
+        frame.set_border_width(4)
+        return frame
+
+    def effect_changed(self, widget):
+        """ Handler for toggled signal for the effects radio buttons
+
+        Enable the related combobox only for the active effect
+        """
+
+        self.__cbt_blur.set_sensitive(self.__rb_blur.get_active())
+        self.__cbt_pixellate.set_sensitive(self.__rb_pixellate.get_active())
+        self.__cbt_smear.set_sensitive(self.__rb_smear.get_active())
+
+    def win_delete_event(self, widget, event, data=None):
+        """Callback for the preferences window delete event
+
+        Do not delete the window, hide it instead so that it can be shown again
+        later if needed
+
+        """
+
+        self.hide()
+        return True
+
+    def win_cancel_button_press(self, widget, event):
+        """Callback for the preferences window Cancel button press
+
+        Hide the window
+        """
+
+        self.hide()
+
+    def setup_blur_levels(self, blur_list):
+        """ Setup the blur level combo box
+
+        Args: 
+            blur_list : a list of strings containing the various levels of blur
+                        to apply, e.g. "Slight", "Medium", "Heavy"
+        """
+
+        for bl in blur_list:
+            self.__cbt_blur.append_text(bl)
+
+        # keep the blur list for use when setting the combobox ative item
+        self.__blur_list = blur_list
+
+    def __set_blur_level(self, blur_level):
+        """ Set the blur level combobox active item to blur_level
+
+        Args: 
+            blur_level : string, e.g. "Heavy"
+        """
+
+        self.__cbt_blur.set_active(self.__blur_list.index(blur_level))
+
+    def __get_blur_level(self):
+        """ Get the blur level
+
+        Returns:
+            String 
+        """
+
+        if build_gtk2:
+            # get_active_text() does not seem to work on gtk2, so....
+            ai = self.__cbt_blur.get_active()
+            return self.__blur_list[ai]
+
+        else:
+            return self.__cbt_blur.get_active_text()
+
+    blur_level = property(__get_blur_level, __set_blur_level)
+
+    def setup_pix_levels(self, pix_list):
+        """ Setup the pixellate level combo box
+
+        Args: 
+            pix_list : a list of strings containing the various levels of pixellation
+                       to apply, e.g. "Slight", "Medium", "Heavy"
+        """
+
+        for pl in pix_list:
+            self.__cbt_pixellate.append_text(pl)
+
+        self.__pix_list = pix_list
+
+    def __set_pix_level(self, pix_level):
+        """ Set the pixellation level combobox active item to pix_level
+
+        Args: 
+            blur_level : string, e.g. "Heavy"
+        """
+
+        self.__cbt_pixellate.set_active(self.__pix_list.index(pix_level))
+
+    def __get_pix_level(self):
+        """ Get the pixellation level
+
+        Returns:
+            String 
+        """
+        if build_gtk2:
+            # get_active_text() does not seem to work on gtk2, so....
+            ai = self.__cbt_pixellate.get_active()
+            return self.__pix_list[ai]
+
+        else:
+            return self.__cbt_pixellate.get_active_text()
+
+    pix_level = property(__get_pix_level, __set_pix_level)
+
+    def setup_smear_levels(self, smear_list):
+        """ Setup the smear level combo box
+
+        Args: 
+            smear_list : a list of strings containing the various levels of smear
+                       to apply, e.g. "Slight", "Medium", "Heavy"
+        """
+
+        for sl in smear_list:
+            self.__cbt_smear.append_text(sl)
+
+        self.__smear_list = smear_list
+
+    def __set_smear_level(self, smear_level):
+        """ Set the smear level combobox active item to smear_level
+
+        Args: 
+            blur_level : string, e.g. "Heavy"
+        """
+
+        self.__cbt_smear.set_active(self.__smear_list.index(smear_level))
+
+    def __get_smear_level(self):
+        """ Get the smear level
+
+        Returns:
+            String 
+        """
+
+        if build_gtk2:
+            # get_active_text() does not seem to work on gtk2, so....
+            ai = self.__cbt_smear.get_active()
+            return self.__smear_list[ai]
+
+        else:
+            return self.__cbt_smear.get_active_text()
+
+    smear_level = property(__get_smear_level, __set_smear_level)
+
+    def __set_active_effect(self, effect):
+        """ Set the current active effect
+
+        Set the radiobutton corresponding to the effect to active
+        """
+
+        if effect == EffectType.grayscale:
+            self.__rb_grayscale.set_active(True)
+        elif effect == EffectType.blur:
+            self.__rb_blur.set_active(True)
+        elif effect == EffectType.pixellate:
+            self.__rb_pixellate.set_active(True)
+        else:
+            self.__rb_smear.set_active(True)
+
+    def __get_active_effect(self):
+        """ Return the currently selected active effect
+
+        Returns:
+            An EffectType
+        """
+
+        if self.__rb_grayscale.get_active():
+            return EffectType.grayscale
+        elif self.__rb_blur.get_active():
+            return EffectType.blur
+        elif self.__rb_pixellate.get_active():
+            return EffectType.pixellate
+        else:
+            return EffectType.smear
+
+    active_effect = property(__get_active_effect, __set_active_effect)
+
+    def __set_colour(self, colour):
+        """ Set the colour of the panel background
+        
+        Args:
+            colour: the colour to set in "#RRGGBB" format
+        """
+
+        if build_gtk2:
+            cbrgba = Gdk.color_parse(colour)
+            self.__colbtn.set_color(color=cbrgba)
+        else:
+            cbrgba = Gdk.RGBA()
+            cbrgba.parse(colour)
+            self.__colbtn.set_rgba(cbrgba)
+
+        self.__colbtn.set_use_alpha(False)
+
+    def __get_colour(self):
+        """ Returns the colour set by the user for the panel background
+            
+        Returns:
+            the colour in "#RRGGBB" format
+        """
+
+        if build_gtk2:
+            cbrgba = self.__colbtn.get_color()
+        else:
+            cbrgba = self.__colbtn.get_rgba().to_color()
+
+        # the r,g,b of cbrgba are 16bit, so we need to convert them to 8 bit
+        return "#%0.2X%0.2X%0.2X" % (int(cbrgba.red / 256),
+                                     int(cbrgba.green / 256),
+                                     int(cbrgba.blue / 256))
+
+    panel_colour = property(__get_colour, __set_colour)
+
+    def __set_opacity(self, opacity):
+        """ Set the value of panel opacity
+
+        Args:
+            Opacity - a float within the range set_by self.__scale_alpha
+        """
+
+        self.__scale_alpha.set_value(opacity)
+
+    def __get_opacity(self):
+        """ Return the panel opacity value"
+
+        Returns:
+            A float within the range set by self.__scale_alpha
+        """
+
+        return self.__scale_alpha.get_value()
+
+    opacity = property(__get_opacity, __set_opacity)
+
+    def __set_all_panels(self, all_panels):
+        """ Set the value of the all_panels checkbutton
+
+        Args:
+            all_panels : boolean
+        """
+
+        self.__cb_all_panels.set_active(all_panels)
+
+    def __get_all_panels(self):
+        """ Get the value of the all_panels checkbutton
+
+        Returns:
+            Bool : true if the effects to be applied to all panels, false
+                   if only to the the panel containing the applet
+        """
+
+        return self.__cb_all_panels.get_active()
+
+    all_panels = property(__get_all_panels, __set_all_panels)
+
+
+def main():
+    """main function - debug code can go here"""
+    pw = PrefsDialog(Gtk.main_quit, Gtk.main_quit)
+    bl = ["blur slight", "blur_med", "blur_heavy"]
+    pw.setup_blur_levels(bl)
+    pw.setup_pix_levels(["pix_slight", "pix_med", "pix_heavy"])
+    pw.setup_smear_levels(["sm_slight", "sm_med", "sm_heavy"])
+    pw.blur_level = "blur_med"
+    pw.pix_level = "pix_heavy"
+    pw.smear_level = "sm_slight"
+    pw.active_effect = EffectType.smear
+    pw.panel_colour = "#ff8000"
+    print(pw.panel_colour)
+    pw.opacity = 0.85
+    pw.all_panels = True
+    print(pw.opacity)
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

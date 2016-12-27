@@ -1,0 +1,17 @@
+.*.*~
+*.*~
+*~
+*.py
+*.swp
+*.pyc
+__pycache__
+*.valid
+autom4te.cache
+configure
+INSTALL
+install.sh
+Makefile
+Makefile.in
+missing
+py-compile
+

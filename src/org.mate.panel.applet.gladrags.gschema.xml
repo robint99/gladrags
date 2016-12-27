@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="gladrags">
+   <schema id="org.mate.panel.applet.gladrags">
+     <key type="b" name="all-panels">
+      <default>false</default>
+      <summary>Whether to apply effects to all panels</summary>
+      <description>Whether to apply effects to all panels (true) or only to the panel containing the applet (false).</description>
+    </key>
+    <key type="i" name="active-effect">
+      <default>0</default>
+      <summary>The type of effect to apply to panels</summary>
+      <description>The type of effect (e.g. blur, pixellate) to apply to panels.</description>
+    </key>
+    <key type="s" name="pixellate-setting">
+       <default>"slight"</default>
+       <summary>The amount of pixellation to apply to panel backgrounds</summary>
+       <description>The amount of pixellation to be applied to panel backgrounds</description>
+    </key>
+    <key type="s" name="blur-setting">
+       <default>"slight"</default>
+       <summary>The amount of blur to apply to panel backgrounds</summary>
+       <description>The amount of blur to be applied to panel backgrounds</description>
+    </key>
+    <key type="s" name="smear-setting">
+       <default>"slight"</default>
+       <summary>The amount of pixel spread to apply to panel backgrounds</summary>
+       <description>The amount of pixel spread to be applied to panel backgrounds</description>
+    </key>
+    <key type="s" name="panel-colour">
+        <default>"#000000"</default>
+        <summary>The background colour to apply to panels</summary>
+        <description>The background color in hex RGB format e.g. "#ffffff"</description>
+    </key>
+    <key type="s" name="panel-alpha">
+        <default>"0.5"</default>
+        <summary>The alpha (transparency) value to apply to panel colours</summary>
+        <description>The alpga (transparency) value (between 0 and 1) to apply to panel colours</description>
+    </key>
+   </schema>
+</schemalist>

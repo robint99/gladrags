@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""
+Provide an about dialog for the MATE gladrags applet
+
+The dialog displays the following:
+    applet name and version number
+    licensing info (GPL3) with a clickable link for the full version
+    a close button
+"""
+
+# Copyright (C) 1997-2003 Free Software Foundation, Inc.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation; either version 2 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+# 02110-1301, USA.
+#
+# Author:
+#     Robin Thompson
+#
+
+# do not change the value of this variable - it will be set during build
+# according to the value of the --with-gtk3 option used with .configure
+build_gtk2 = False
+
+import gi
+
+if build_gtk2:
+    gi.require_version("Gtk", "2.0")
+else:
+    gi.require_version("Gtk", "3.0")
+
+import sys
+
+from gi.repository import Gtk
+
+
+class AboutDialog(Gtk.Window):
+    """Provides the About window
+
+    """
+
+    def __init__(self):
+        """Init for the About window class
+
+        Create the window and its contents
+        """
+
+        super().__init__(title="About Gladrags")
+
+        self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+
+        self.__btn_close = Gtk.Button(label="Close", stock=Gtk.STOCK_CLOSE)
+        self.__btn_close.connect("button-press-event", self.close_button_press)
+        self.__btn_credits = Gtk.ToggleButton.new_with_label("Credits")
+        self.__btn_credits.connect("toggled", self.credits_button_toggled)
+        self.__btn_license = Gtk.ToggleButton.new_with_label("License")
+        self.__btn_license.connect("toggled", self.license_button_toggled)
+
+        self.connect("delete-event", self.win_delete_event)
+        self.set_border_width(5)
+
+        # use a notebook widget to display the various pages of info
+        self.__nb = Gtk.Notebook()
+        self.__nb.set_show_tabs(False)
+        self.__nb.set_show_border(False)
+
+        # create a container for the dialog and others for the pages of the notebook
+        if build_gtk2:
+            self.__vbox = Gtk.VBox()
+            self.__vbox.set_spacing(2)
+            self.__vbox_dflt = Gtk.VBox()
+            self.__vbox_dflt.set_spacing(8)
+            self.__vbox_license = Gtk.VBox()
+            self.__vbox_license.set_spacing(8)
+        else:
+            self.__vbox = Gtk.Box()
+            self.__vbox.set_orientation(Gtk.Orientation.VERTICAL)
+            self.__vbox.set_spacing(4)
+
+            self.__vbox_dflt = Gtk.Box()
+            self.__vbox_dflt.set_orientation(Gtk.Orientation.VERTICAL)
+            self.__vbox_dflt.set_spacing(8)
+
+            self.__vbox_license = Gtk.Box()
+            self.__vbox_license.set_orientation(Gtk.Orientation.VERTICAL)
+            self.__vbox_license.set_spacing(8)
+
+        if build_gtk2:
+            self.__hbx = Gtk.HButtonBox()
+        else:
+            self.__hbx = Gtk.ButtonBox()
+            self.__hbx.orientation = Gtk.Orientation.HORIZONTAL
+
+        self.__hbx.set_layout(Gtk.ButtonBoxStyle.END)
+        self.__hbx.set_spacing(4)
+        self.__hbx.pack_start(self.__btn_credits, False, False, 4)
+        self.__hbx.pack_start(self.__btn_license, False, False, 4)
+        self.__hbx.pack_start(self.__btn_close, False, False, 4)
+
+        self.__lbl_blank1 = Gtk.Label()
+        self.__image = Gtk.Image()
+        self.__image.set_from_stock(Gtk.STOCK_ABOUT, Gtk.IconSize.DIALOG)
+        self.__lbl_title = Gtk.Label()
+        self.__lbl_title.set_use_markup(True)
+        if build_gtk2:
+            gtk_ver = "GTK2"
+        else:
+            gtk_ver = "GTK3"
+
+        self.__lbl_title.set_markup("<b>Gladrags</b>")
+        self.__lbl_ver = Gtk.Label("V" + "@VERSION@ (" + gtk_ver+ ")")
+        self.__lbl_blank2 = Gtk.Label()
+
+        self.__tb_gpl = Gtk.TextBuffer()
+        self.__tag_size = self.__tb_gpl.create_tag("size")
+        self.__tag_size.set_property("size-points", 9)
+        iter_start = self.__tb_gpl.get_start_iter()
+
+        self.__tb_gpl.insert_with_tags(iter_start,
+                                       "Gladrags is free software; you can redistribute it and/or modify it under " +
+                                       "the terms of the GNU General Public Licence as published by the Free " +
+                                       "Software Foundation; either version 3 of the Licence, or (at your option) " +
+                                       "any later version. \n\nGladrags is distributed in the hope that it will be " +
+                                       "useful, but WITHOUT ANY WARRANTY; without even the implied warranty of " +
+                                       "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General " +
+                                       "Public Licence for more details.\n\nYou should have received a copy of the " +
+                                       "GNU General Public Licence along with Gladrags; if not, write to the Free " +
+                                       "Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA " +
+                                       "02110-1301 USA\n",
+                                       self.__tag_size)
+
+        self.__tv_gpl = Gtk.TextView.new_with_buffer(self.__tb_gpl)
+        self.__tv_gpl.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.__scrolled_win = Gtk.ScrolledWindow()
+
+        self.__scrolled_win.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.__scrolled_win.add(self.__tv_gpl)
+
+        self.__lbl_blurb1 = \
+            Gtk.Label("Give your panels a new set of clothes!")
+        self.__lbl_blurb2 = \
+            Gtk.Label("This program comes with ABSOLUTELY NO WARRENTY")
+        self.__lbl_blurb3 = Gtk.Label("and is distributed under the GNU General")
+        self.__lbl_blurb4 = Gtk.Label("Public License, version 3 or later")
+
+        if build_gtk2:
+            self.__hbx_gpl = Gtk.HBox()
+        else:
+            self.__hbx_gpl = Gtk.Box()
+            self.__hbx_gpl.set_orientation(Gtk.Orientation.HORIZONTAL)
+            self.__hbx_gpl.set_spacing(0)
+
+        self.__lbl_gpl1 = Gtk.Label("For details click")
+        self.__lb_gpl = \
+            Gtk.LinkButton.new_with_label("http://www.gnu.org/licenses/gpl-3.0.html",
+                                          "here")
+
+        self.__hbx_gpl.pack_start(self.__lbl_gpl1, False, False, 0)
+        self.__hbx_gpl.pack_start(self.__lb_gpl, False, False, 0)
+
+       # if build_gtk2:
+        #    self.__vbox_dflt.pack_start(self.__image, False, False, 2)
+         #   self.__vbox_dflt.pack_start(self.__lbl_title, False, False, 0)
+          #  self.__vbox_dflt.pack_start(self.__lbl_blurb1, False, False, 8)
+#
+ #           self.__vbox_license.pack_start(self.__lbl_blurb2, False, False, 2)
+  #          self.__vbox_license.pack_start(self.__lbl_blurb3, False, False, 2)
+   #         self.__vbox_license.pack_start(self.__lbl_blurb4, False, False, 2)
+    #        self.__vbox_license.pack_start(self.__hbx_gpl, False, False, 0)
+
+     #   else:
+
+        self.__vbox_dflt.pack_start(self.__lbl_ver, False, False, 0)
+        self.__vbox_dflt.pack_start(self.__lbl_blank2, False, False, 0)
+        self.__vbox_license.pack_start(self.__scrolled_win, True, True, 2)
+
+        if build_gtk2:
+            self.__vbox_credits = Gtk.Table(rows=4, columns=2,
+                                            homogeneous=False)
+  
+        else:
+            self.__vbox_credits = Gtk.Grid()
+            self.__vbox_credits.set_column_spacing(4)
+            self.__vbox_credits.set_row_spacing(4)
+            self.__vbox_credits.set_row_homogeneous(True)
+            self.__vbox_credits.set_halign(Gtk.Align.START)
+            self.__vbox_credits.set_vexpand(False)
+
+        self.__lbl_author1 = Gtk.Label("Author:")
+       
+        self.__lbl_author2 = Gtk.Label()
+        self.__lbl_author2.set_use_markup(True)
+        self.__lbl_author2.set_markup('<b>Robin Thompson</b>')
+ 
+  
+        self.__lbl_freepik = Gtk.Label("Icon by:")
+       
+        self.__lb_freepik = \
+            Gtk.LinkButton.new_with_label("http://www.freepik.com",
+                                          "Freepik")
+       
+        self.__lbl_flaticon = Gtk.Label("Icon from:")
+        
+        self.__lb_flaticon = \
+            Gtk.LinkButton.new_with_label("http://www.flaticon.com", "Flaticon")
+        
+        self.__lbl_cc = Gtk.Label("Icon license:")
+        
+        self.__lb_cc = \
+            Gtk.LinkButton.new_with_label("http://creativecommons.org/licenses/by/3.0/", "Creative Commons V3.0")
+        
+
+        if build_gtk2:
+            self.__lbl_author1.set_alignment(xalign=1, yalign=0.5)
+            self.__lbl_author2.set_alignment(xalign=0, yalign=0.5)
+            self.__lbl_freepik.set_alignment(xalign=1, yalign=0.5)
+            self.__lb_freepik.set_alignment(xalign=0, yalign=0.5)
+            self.__lbl_flaticon.set_alignment(xalign=1, yalign=0.5)
+            self.__lb_flaticon.set_alignment(xalign=0, yalign=0.5)
+            self.__lbl_cc.set_alignment(xalign=1, yalign=0.5)
+            self.__lb_cc.set_alignment(xalign=0, yalign=0.5)
+            self.__vbox_credits.attach(self.__lbl_author1, 0, 1, 0, 1,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__vbox_credits.attach(self.__lbl_author2, 1, 2, 0, 1,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__vbox_credits.attach(self.__lbl_freepik, 0, 1, 1, 2,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__vbox_credits.attach(self.__lb_freepik, 1, 2, 1, 2,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__vbox_credits.attach(self.__lbl_flaticon, 0, 1, 2, 3,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__vbox_credits.attach(self.__lb_flaticon, 1, 2, 2, 3,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__vbox_credits.attach(self.__lbl_cc, 0, 1, 3, 4,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+            self.__vbox_credits.attach(self.__lb_cc, 1, 2, 3, 4,
+                                       Gtk.AttachOptions.FILL,
+                                       Gtk.AttachOptions.SHRINK,
+                                       2, 2, )
+        else:
+            self.__lbl_author1.set_halign(Gtk.Align.END)
+            self.__lbl_author2.set_halign(Gtk.Align.START)
+            self.__lbl_freepik.set_halign(Gtk.Align.END)
+            self.__lb_freepik.set_halign(Gtk.Align.START)
+            self.__lbl_flaticon.set_halign(Gtk.Align.END)
+            self.__lb_flaticon.set_halign(Gtk.Align.START)
+            self.__lbl_cc.set_halign(Gtk.Align.END)
+            self.__lb_cc.set_halign(Gtk.Align.START)
+
+            self.__vbox_credits.attach(self.__lbl_author1, 0, 0, 1, 1)
+            self.__vbox_credits.attach(self.__lbl_author2, 1, 0, 1, 1)
+            self.__vbox_credits.attach(self.__lbl_freepik, 0, 1, 1, 1)
+            self.__vbox_credits.attach(self.__lb_freepik, 1, 1, 1, 1)
+            self.__vbox_credits.attach(self.__lbl_flaticon, 0, 2, 1, 1)
+            self.__vbox_credits.attach(self.__lb_flaticon, 1, 2, 1, 1)
+            self.__vbox_credits.attach(self.__lbl_cc, 0, 3, 1, 1)
+            self.__vbox_credits.attach(self.__lb_cc, 1, 3, 1, 1)
+
+        self.__pg_dflt = self.__nb.append_page(self.__vbox_dflt)
+        self.__pg_license = self.__nb.append_page(self.__vbox_license)
+        self.__pg_credits = self.__nb.append_page(self.__vbox_credits)
+
+        self.__vbox.pack_start(self.__lbl_blank1, False, False, 2)
+        self.__vbox.pack_start(self.__image, False, False, 2)
+        self.__vbox.pack_start(self.__lbl_title, False, False, 2)
+        self.__vbox.pack_start(self.__nb, True, True, 2)
+        self.__vbox.pack_end(self.__hbx, False, False, 2)
+
+        self.add(self.__vbox)
+
+        self.set_size_request(270, 300)
+  
+
+    def win_delete_event(self, widget, event, data=None):
+        """Callback for the about window delete event
+
+        Note: the window is not deleted, it is hidden instead so that it can
+        be shown again if required later
+        """
+
+        self.hide()
+        return True
+
+    def close_button_press(self, widget, event):
+        """
+        callback for the Close button on the About dialog
+
+        The window is hidden so that it can be shown again
+        """
+
+        self.hide()
+
+    def license_button_toggled(self, widget):
+        """
+        callback for when the license button is toggled
+
+        Show the license info if the license button is active, otherwise
+        restore the main or credits info as appropriate
+
+        Params:
+            widget: the togglebuton
+
+        """
+
+        if self.__btn_license.get_active():
+
+            self.__nb.set_current_page(self.__pg_license)
+        else:
+            if self.__btn_credits.get_active():
+                self.__nb.set_current_page(self.__pg_credits)
+            else:
+                self.__nb.set_current_page(self.__pg_dflt)
+
+    def credits_button_toggled(self, widget):
+        """
+        callback for when the credits button is toggled
+
+        Show the credits info if the credits button is active, otherwise
+        restore the main or license info as appropriate
+
+        Params:
+            widget: the togglebuton
+
+        """
+
+        if self.__btn_credits.get_active():
+            self.__nb.set_current_page(self.__pg_credits)
+        else:
+            if self.__btn_license.get_active():
+                self.__nb.set_current_page(self.__pg_license)
+            else:
+                self.__nb.set_current_page(self.__pg_dflt)
+
+
+def main():
+    """
+    main function - debugging code goes here
+    """
+
+    about_dlg = AboutDialog()
+    about_dlg.show_all()
+    Gtk.main()
+
+    return
+
+if __name__ == "__main__":
+    main()
